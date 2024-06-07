@@ -59,7 +59,7 @@ struct pps_gmtimer_platform_data {
   unsigned int overflow;
   unsigned int count_at_interrupt;
   struct pps_event_time ts;
-  struct timespec delta;
+  struct timespec64 delta;
   struct pps_device *pps;
   struct pps_source_info info;
   int ready;
@@ -67,6 +67,8 @@ struct pps_gmtimer_platform_data {
 };
 
 struct omap_dm_timer_ops timer_ops;
+
+typedef u64 cycle_t;
 
 /* kobject *******************/
 static ssize_t timer_name_show(struct device *dev, struct device_attribute *attr, char *buf) {
