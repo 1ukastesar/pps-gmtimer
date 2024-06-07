@@ -43,7 +43,8 @@
 #include <linux/pps_kernel.h>
 #include <linux/clocksource.h>
 
-#include <plat/dmtimer.h>
+#include <clocksource/timer-ti-dm.h>
+#include <linux/platform_data/dmtimer-omap.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Dan Drown");
@@ -64,6 +65,8 @@ struct pps_gmtimer_platform_data {
   int ready;
   struct clocksource clksrc;
 };
+
+struct omap_dm_timer_ops timer_ops;
 
 /* kobject *******************/
 static ssize_t timer_name_show(struct device *dev, struct device_attribute *attr, char *buf) {
@@ -123,7 +126,7 @@ static ssize_t timer_counter_show(struct device *dev, struct device_attribute *a
   struct pps_gmtimer_platform_data *pdata = dev->platform_data;
   unsigned int current_count = 0;
 
-  current_count = omap_dm_timer_read_counter(pdata->capture_timer);
+  current_count = timer_ops.read_counter(pdata->capture_timer);
   return sprintf(buf, "%u\n", current_count);
 }
 
@@ -154,13 +157,13 @@ static irqreturn_t pps_gmtimer_interrupt(int irq, void *data) {
   if(pdata->ready) {
     unsigned int irq_status;
 
-    irq_status = omap_dm_timer_read_status(pdata->capture_timer);
+    irq_status = timer_ops.read_status(pdata->capture_timer);
     if(irq_status & OMAP_TIMER_INT_CAPTURE) {
       uint32_t ps_per_hz;
       unsigned int count_at_capture;
 
       pps_get_ts(&pdata->ts);
-      pdata->count_at_interrupt = omap_dm_timer_read_counter(pdata->capture_timer);
+      pdata->count_at_interrupt = timer_ops.read_counter(pdata->capture_timer);
       count_at_capture = __omap_dm_timer_read(pdata->capture_timer, OMAP_TIMER_CAPTURE_REG, pdata->capture_timer->posted);
 
       pdata->delta.tv_sec = 0;
@@ -174,11 +177,11 @@ static irqreturn_t pps_gmtimer_interrupt(int irq, void *data) {
 
       pdata->capture++;
 
-      __omap_dm_timer_write_status(pdata->capture_timer, OMAP_TIMER_INT_CAPTURE);
+      timer_ops.write_status(pdata->capture_timer, OMAP_TIMER_INT_CAPTURE);
     }
     if(irq_status & OMAP_TIMER_INT_OVERFLOW) {
       pdata->overflow++;
-      __omap_dm_timer_write_status(pdata->capture_timer, OMAP_TIMER_INT_OVERFLOW);
+      timer_ops.write_status(pdata->capture_timer, OMAP_TIMER_INT_OVERFLOW);
     }
   }
 
@@ -188,9 +191,9 @@ static irqreturn_t pps_gmtimer_interrupt(int irq, void *data) {
 static void omap_dm_timer_setup_capture(struct omap_dm_timer *timer) {
   u32 ctrl;
 
-  omap_dm_timer_set_source(timer, OMAP_TIMER_SRC_SYS_CLK);
+  timer_ops.set_source(timer, OMAP_TIMER_SRC_SYS_CLK);
 
-  omap_dm_timer_enable(timer);
+  timer_ops.enable(timer);
 
   ctrl = __omap_dm_timer_read(timer, OMAP_TIMER_CTRL_REG, timer->posted);
 
@@ -221,8 +224,8 @@ static void omap_dm_timer_setup_capture(struct omap_dm_timer *timer) {
 static void omap_dm_timer_use_tclkin(struct pps_gmtimer_platform_data *pdata) {
   struct clk *gt_fclk;
 
-  omap_dm_timer_set_source(pdata->capture_timer, OMAP_TIMER_SRC_EXT_CLK);
-  gt_fclk = omap_dm_timer_get_fclk(pdata->capture_timer);
+  timer_ops.set_source(pdata->capture_timer, OMAP_TIMER_SRC_EXT_CLK);
+  gt_fclk = timer_ops.get_fclk(pdata->capture_timer);
   pdata->frequency = clk_get_rate(gt_fclk);
   pr_info("timer(%s) switched to tclkin, rate=%uHz\n", pdata->timer_name, pdata->frequency);
 }
@@ -245,7 +248,7 @@ static int pps_gmtimer_init_timer(struct device_node *timer_dn, struct pps_gmtim
     return -ENODEV;
   }
 
-  pdata->capture_timer = omap_dm_timer_request_by_node(timer_dn);
+  pdata->capture_timer = timer_ops.request_by_node(timer_dn);
   if(!pdata->capture_timer) {
     pr_err("request_by_node failed\n");
     return -ENODEV;
@@ -259,7 +262,7 @@ static int pps_gmtimer_init_timer(struct device_node *timer_dn, struct pps_gmtim
 
   omap_dm_timer_setup_capture(pdata->capture_timer);
 
-  gt_fclk = omap_dm_timer_get_fclk(pdata->capture_timer);
+  gt_fclk = timer_ops.get_fclk(pdata->capture_timer);
   pdata->frequency = clk_get_rate(gt_fclk);
 
   pr_info("timer name=%s rate=%uHz\n", pdata->timer_name, pdata->frequency);
@@ -269,11 +272,11 @@ static int pps_gmtimer_init_timer(struct device_node *timer_dn, struct pps_gmtim
 
 static void pps_gmtimer_cleanup_timer(struct pps_gmtimer_platform_data *pdata) {
   if(pdata->capture_timer) {
-    omap_dm_timer_set_source(pdata->capture_timer, OMAP_TIMER_SRC_SYS_CLK); // in case TCLKIN is stopped during boot
-    omap_dm_timer_set_int_disable(pdata->capture_timer, OMAP_TIMER_INT_CAPTURE|OMAP_TIMER_INT_OVERFLOW);
+    timer_ops.set_source(pdata->capture_timer, OMAP_TIMER_SRC_SYS_CLK); // in case TCLKIN is stopped during boot
+    timer_ops.set_int_disable(pdata->capture_timer, OMAP_TIMER_INT_CAPTURE|OMAP_TIMER_INT_OVERFLOW);
     free_irq(pdata->capture_timer->irq, pdata);
-    omap_dm_timer_stop(pdata->capture_timer);
-    omap_dm_timer_free(pdata->capture_timer);
+    timer_ops.stop(pdata->capture_timer);
+    timer_ops.free(pdata->capture_timer);
     pdata->capture_timer = NULL;
     pr_info("Exiting.\n");
   }
